@@ -1,35 +1,42 @@
 import numpy as np
 import random
 from scipy.io import wavfile
-from scipy import signal
 import librosa
 import matplotlib.pyplot as plt
 import os
+from pydub import AudioSegment
 
-# Parametros geneticos
-TAMANO_POBLACION = 10
-GENERACIONES = 100
-TASA_MUTACION = 0.1
+# Parámetros genéticos
+TAMANO_POBLACION = 10 
+GENERACIONES = 10      
+TASA_MUTACION = 0.1    
 
-# Funcion para crear individuos (configuraciones de compresión y mejora)
+# Función para crear individuos (configuraciones de compresión y mejora)
 def crear_individuo():
     return {
-        'bitrate': random.choice([32, 64, 128, 256, 320]),
-        'threshold': random.uniform(-60, 0),  
-        'ratio': random.uniform(1.0, 10.0),  
-        'attack': random.uniform(0.001, 0.1),  
-        'release': random.uniform(0.01, 0.5)
+        'bitrate': random.choice([32000, 64000, 96000, 128000, 160000, 192000]),  
+        'threshold': random.uniform(-60, -20),
+        'ratio': random.uniform(1.5, 5.0),
+        'attack': random.uniform(0.01, 0.05),
+        'release': random.uniform(0.05, 0.2)
     }
 
-# Funcion de evaluación del "fitness" de cada individuo
+# Función de evaluación del "fitness" de cada individuo
 def fitness(individuo, audio_data, sample_rate):
-    # Aplicamos compresion y mejora acustica
+    # Aplicamos compresión y mejora acústica
     processed_audio = aplicar_compresion(audio_data, sample_rate, individuo)
-    size_metric = len(processed_audio)
-    quality_metric = calcular_calidad(audio_data, processed_audio)
-    return size_metric * (1 - quality_metric)
+    
+    # Guardar el audio comprimido temporalmente en formato MP3 con el bitrate especificado
+    save_as_mp3("temp_audio.mp3", processed_audio, sample_rate, individuo['bitrate'])
+    compressed_size = os.path.getsize("temp_audio.mp3")
 
-# Funcion de selección de los mejores individuos
+    # Calcular la calidad percibida entre original y procesado
+    quality_metric = calcular_calidad(audio_data, processed_audio)
+
+    # Fitness basado en tamaño comprimido y calidad percibida
+    return compressed_size * (1 - quality_metric)
+
+# Función de selección de los mejores individuos
 def seleccion(poblacion, audio_data, sample_rate):
     return sorted(poblacion, key=lambda x: fitness(x, audio_data, sample_rate))[:2]
 
@@ -38,28 +45,30 @@ def cruce(padre1, padre2):
     hijo = {param: padre1[param] if random.random() > 0.5 else padre2[param] for param in padre1.keys()}
     return hijo
 
-# Mutacion de un individuo
+# Mutación en el individuo
 def mutacion(individuo):
     mutante = individuo.copy()
     param = random.choice(list(mutante.keys()))
     if param == 'bitrate':
-        mutante[param] = random.choice([32, 64, 128, 256, 320])
+        mutante[param] = random.choice([32000, 64000, 96000, 128000, 160000, 192000])
     elif param == 'threshold':
-        mutante[param] = random.uniform(-60, 0)
+        mutante[param] = random.uniform(-60, -20)
     elif param == 'ratio':
-        mutante[param] = random.uniform(1.0, 10.0)
+        mutante[param] = random.uniform(1.5, 5.0)
     elif param == 'attack':
-        mutante[param] = random.uniform(0.001, 0.1)
+        mutante[param] = random.uniform(0.01, 0.05)
     elif param == 'release':
-        mutante[param] = random.uniform(0.01, 0.5)
+        mutante[param] = random.uniform(0.05, 0.2)
     return mutante
 
-# Algoritmo genético principal con evolucion del fitness
+# Algoritmo genético principal
 def algoritmo_genetico(audio_data, sample_rate):
+    print("Iniciando el algoritmo genético...")
     poblacion = [crear_individuo() for _ in range(TAMANO_POBLACION)]
     fitness_evolucion = []
 
     for generacion in range(GENERACIONES):
+        print(f"Generación {generacion}/{GENERACIONES}")
         padres = seleccion(poblacion, audio_data, sample_rate)
         nueva_poblacion = []
 
@@ -73,10 +82,10 @@ def algoritmo_genetico(audio_data, sample_rate):
         mejor = seleccion(poblacion, audio_data, sample_rate)[0]
         fitness_evolucion.append(fitness(mejor, audio_data, sample_rate))
 
-        if generacion % 10 == 0:
+        if generacion % 2 == 0:
             print(f"Generación {generacion}, Fitness: {fitness(mejor, audio_data, sample_rate)}, Configuración: {mejor}")
 
-    # Graficar la evolucion del fitness
+    # Graficar la evolución del fitness
     plt.plot(range(GENERACIONES), fitness_evolucion)
     plt.xlabel('Generación')
     plt.ylabel('Mejor Fitness')
@@ -85,41 +94,47 @@ def algoritmo_genetico(audio_data, sample_rate):
 
     return seleccion(poblacion, audio_data, sample_rate)[0]
 
-# Funcion para aplicar compresion en audio
+# Función para aplicar compresión en audio
 def aplicar_compresion(audio_data, sample_rate, individuo):
     threshold = individuo['threshold']
     ratio = individuo['ratio']
     attack = individuo['attack']
     release = individuo['release']
 
-    compressed_audio = signal.lfilter([1], [1, -0.99], np.maximum(audio_data - threshold, 0) / ratio)
+    print(f"Aplicando compresión con threshold: {threshold}, ratio: {ratio}")
+
+    compressed_audio = np.maximum(audio_data - threshold, 0) / ratio
     return compressed_audio
 
-# Funcion para evaluar la calidad de audio entre original y procesado
+# Función para evaluar la calidad de audio entre original y procesado
 def calcular_calidad(original, procesado):
-    try:
-        original = librosa.util.normalize(original)
-        procesado = librosa.util.normalize(procesado)
-        quality_metric = np.mean(np.abs(original - procesado))
-        return quality_metric
-    except Exception as e:
-        print(f"Error en la evaluación de calidad: {e}")
-        return 1
+    original = librosa.util.normalize(original)
+    procesado = librosa.util.normalize(procesado)
+    quality_metric = np.mean(np.abs(original - procesado))
+    return quality_metric
 
-# Cargar archivo de audio y ejecutar el algoritmo genetico
-sample_rate, audio_data = wavfile.read("archivo_audio.wav")
+# Función para guardar como MP3 con el bitrate especificado
+def save_as_mp3(filename, audio_data, sample_rate, bitrate):
+    temp_wav = "temp_audio.wav"
+    wavfile.write(temp_wav, sample_rate, audio_data.astype(np.int16))
+    audio = AudioSegment.from_wav(temp_wav)
+    audio.export(filename, format="mp3", bitrate=f"{bitrate // 1000}k")  # Cambiado a 'k' para kilobits
+    os.remove(temp_wav)
+
+# Cargar archivo de audio y ejecutar el algoritmo genético
+sample_rate, audio_data = wavfile.read("Thisboy.wav")
 audio_data = audio_data.astype(float)
 
-# Ejecutar algoritmo genetico y obtener la mejor configuracion de audio
+# Ejecutar algoritmo genético y obtener la mejor configuración de audio
 mejor_configuracion = algoritmo_genetico(audio_data, sample_rate)
 print(f"Mejor configuración encontrada: {mejor_configuracion}")
 
-# Aplicar compresion
+# Aplicar compresión y guardar el resultado como MP3 con el mejor bitrate
 audio_procesado = aplicar_compresion(audio_data, sample_rate, mejor_configuracion)
-wavfile.write("audio_procesado.wav", sample_rate, audio_procesado.astype(np.int16))
+save_as_mp3("audio_procesado.mp3", audio_procesado, sample_rate, mejor_configuracion['bitrate'])
 
-# Prueba de tamano de archivo
-original_size = os.path.getsize("archivo_audio.wav")
-processed_size = os.path.getsize("audio_procesado.wav")
+# Prueba de tamaño de archivo
+original_size = os.path.getsize("Thisboy.wav")
+processed_size = os.path.getsize("audio_procesado.mp3")
 print(f"Tamaño original: {original_size / 1024:.2f} KB")
 print(f"Tamaño comprimido: {processed_size / 1024:.2f} KB")
